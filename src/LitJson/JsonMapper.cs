@@ -87,12 +87,22 @@ namespace LitJson
         }
     }
 
+    internal struct ArrayImporterMetadata
+    {
+        public Type ArrayType;
+        public Type ElementType;
+        public ArrayImporterFunc Importer;
+    }
+
 
     internal delegate void ExporterFunc    (object obj, JsonWriter writer);
     public   delegate void ExporterFunc<T> (T obj, JsonWriter writer);
 
     internal delegate object ImporterFunc                (object input);
     public   delegate TValue ImporterFunc<TJson, TValue> (TJson input);
+    
+    internal delegate object     ArrayImporterFunc(IEnumerable elements);
+    public   delegate TArrayType ArrayImporterFunc<TArrayType, TElemType>(IEnumerable elements);
 
     public delegate IJsonWrapper WrapperFactory ();
 
@@ -123,6 +133,8 @@ namespace LitJson
                 IDictionary<Type, ImporterFunc>> base_importers_table;
         private static IDictionary<Type,
                 IDictionary<Type, ImporterFunc>> custom_importers_table;
+
+        private static IDictionary<Type, ArrayImporterMetadata> array_importers_table;
 
         private static IDictionary<Type, ArrayMetadata> array_metadata;
         private static readonly object array_metadata_lock = new Object ();
@@ -165,6 +177,8 @@ namespace LitJson
                                  IDictionary<Type, ImporterFunc>> ();
             custom_importers_table = new Dictionary<Type,
                                    IDictionary<Type, ImporterFunc>> ();
+
+            array_importers_table = new Dictionary<Type, ArrayImporterMetadata> ();
 
             RegisterBaseExporters ();
             RegisterBaseImporters ();
@@ -442,38 +456,55 @@ namespace LitJson
                 AddArrayMetadata (inst_type);
                 ArrayMetadata t_data = array_metadata[inst_type];
 
-                if (! t_data.IsArray && ! t_data.IsList)
+                if (t_data.IsArray || t_data.IsList) {
+                    IList list;
+                    Type elem_type;
+
+                    if (! t_data.IsArray) {
+                        list = (IList) Activator.CreateInstance (inst_type);
+                        elem_type = t_data.ElementType;
+                    } else {
+                        list = new ArrayList ();
+                        elem_type = inst_type.GetElementType ();
+                    }
+
+                    while (true) {
+                        object item = ReadValue (elem_type, reader);
+                        if (item == null && reader.Token == JsonToken.ArrayEnd)
+                            break;
+
+                        list.Add (item);
+                    }
+
+                    if (t_data.IsArray) {
+                        int n = list.Count;
+                        instance = Array.CreateInstance (elem_type, n);
+
+                        for (int i = 0; i < n; i++)
+                            ((Array) instance).SetValue (list[i], i);
+                    } else
+                        instance = list;
+                }
+                else if (array_importers_table.ContainsKey(inst_type)) {
+                    ArrayImporterMetadata importerMetaData = array_importers_table[inst_type];
+
+                    ArrayList tempList = new ArrayList();
+
+                    while (true) {
+                        object item = ReadValue (importerMetaData.ElementType, reader);
+                        if (item == null && reader.Token == JsonToken.ArrayEnd)
+                            break;
+
+                        tempList.Add (item);
+                    }
+
+                    instance = importerMetaData.Importer(tempList);
+                }
+                else {
                     throw new JsonException (String.Format (
                             "Type {0} can't act as an array",
                             inst_type));
-
-                IList list;
-                Type elem_type;
-
-                if (! t_data.IsArray) {
-                    list = (IList) Activator.CreateInstance (inst_type);
-                    elem_type = t_data.ElementType;
-                } else {
-                    list = new ArrayList ();
-                    elem_type = inst_type.GetElementType ();
                 }
-
-                while (true) {
-                    object item = ReadValue (elem_type, reader);
-                    if (item == null && reader.Token == JsonToken.ArrayEnd)
-                        break;
-
-                    list.Add (item);
-                }
-
-                if (t_data.IsArray) {
-                    int n = list.Count;
-                    instance = Array.CreateInstance (elem_type, n);
-
-                    for (int i = 0; i < n; i++)
-                        ((Array) instance).SetValue (list[i], i);
-                } else
-                    instance = list;
 
             } else if (reader.Token == JsonToken.ObjectStart) {
                 AddObjectMetadata (value_type);
@@ -999,6 +1030,22 @@ namespace LitJson
                               typeof (TValue), importer_wrapper);
         }
 
+        public static void RegisterArrayImporter<TArrayType, TElementType>(
+            ArrayImporterFunc<TArrayType, TElementType> importer)
+        {
+            ArrayImporterFunc importer_wrapper =
+                delegate (IEnumerable elements)
+                {
+                    return importer(elements);
+                };
+            array_importers_table[typeof(TArrayType)] = new ArrayImporterMetadata
+            {
+                ArrayType = typeof(TArrayType),
+                ElementType = typeof(TElementType),
+                Importer = importer_wrapper
+            };
+        }
+
         public static void UnregisterExporters ()
         {
             custom_exporters_table.Clear ();
@@ -1007,6 +1054,7 @@ namespace LitJson
         public static void UnregisterImporters ()
         {
             custom_importers_table.Clear ();
+            array_importers_table.Clear ();
         }
     }
 }

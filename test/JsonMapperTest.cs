@@ -245,10 +245,37 @@ namespace LitJson.Test
         public NullableEnum? TestEnum;
     }
 
+    public class CustomArrayImporterTest
+    {
+        public HashSet<string> HashSet = new HashSet<string>();
+    }
 
     [TestFixture]
     public class JsonMapperTest
     {
+        static JsonMapperTest()
+        {
+            // Register custom exporter/importer for hash set of string
+            JsonMapper.RegisterExporter<HashSet<string>>((set, writer) =>
+                {
+                    writer.WriteArrayStart();
+                    foreach (string str in set)
+                    {
+                        writer.Write(str);
+                    }
+                    writer.WriteArrayEnd();
+                });
+            JsonMapper.RegisterArrayImporter<HashSet<string>, string>(strings =>
+                {
+                    HashSet<string> set = new HashSet<string>();
+                    foreach (string str in strings)
+                    {
+                        set.Add(str);
+                    }
+                    return set;
+                });
+        }
+
         [Test]
         public void CustomExporterTest ()
         {
@@ -1147,6 +1174,24 @@ namespace LitJson.Test
             value = new NullableEnumTest() { TestEnum = null };
             expectedJson = "{\"TestEnum\":null}";
             Assert.AreEqual(expectedJson, JsonMapper.ToJson(value));
+        }
+
+        [Test]
+        public void CustomArrayImporterTest()
+        {
+            CustomArrayImporterTest value = new CustomArrayImporterTest();
+            value.HashSet.Add("Bob");
+            value.HashSet.Add("Joe");
+            value.HashSet.Add("Steve");
+
+            string expectedJson = "{\"HashSet\":[\"Bob\",\"Joe\",\"Steve\"]}";
+            Assert.AreEqual(expectedJson, JsonMapper.ToJson(value));
+
+            CustomArrayImporterTest newValue = JsonMapper.ToObject<CustomArrayImporterTest>(expectedJson);
+
+            Assert.IsTrue(newValue.HashSet.Contains("Bob"));
+            Assert.IsTrue(newValue.HashSet.Contains("Joe"));
+            Assert.IsTrue(newValue.HashSet.Contains("Steve"));
         }
     }
 }
